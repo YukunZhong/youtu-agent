@@ -1,0 +1,17 @@
+# @package _global_
+# Eval config used by practice for GQA (training verifier)
+defaults:
+  - /agents/practice/anole_vqa_base@agent
+  - _self_
+
+exp_id: "gqa_practice_eval"
+
+data:
+  dataset: "GQA_eval"
+  type: "single"
+
+concurrency: 16
+pass_k: 1
+
+verify_filename: "vqa_train_reward.py"
+verify_func_name: "verify_func"

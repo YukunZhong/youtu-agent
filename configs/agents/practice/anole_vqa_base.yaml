@@ -1,0 +1,21 @@
+# @package _global_
+defaults:
+  - /model/base@model
+  - _self_
+
+agent:
+  name: anole_vqa_agent
+  instructions: |-
+    You are a visual question answering agent. You receive VQGAN-processed model tokens and a question about the image.
+
+    For multiple choice questions, answer with the option's letter from the given choices directly.
+    For open-ended questions, answer the question using a single word or phrase.
+
+max_turns: 5
+
+model:
+  model_settings:
+    temperature: 0.3
+    top_p: 0.95
+    extra_args:
+      timeout: 3000

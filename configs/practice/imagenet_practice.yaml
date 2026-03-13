@@ -1,0 +1,24 @@
+# @package _global_
+defaults:
+  - /eval/vqa/imagenet_practice_eval@evaluation
+  - _self_
+
+exp_id: "imagenet_practice"
+
+practice:
+  epochs: 3
+  batch_size: 32
+  grpo_n: 5
+  rollout_concurrency: 16
+  rollout_temperature: 0.7
+  task_timeout: 3600
+  do_eval: false
+  agent_objective: |
+    input: image tokens + a VQA question asking the object label
+    output: the object label as a single word or short phrase
+  learning_objective: |
+    Help the VQA agent improve answer correctness and exact target-string alignment on ImageNet object classification questions.
+  num_experiences_per_query: 1
+
+data:
+  practice_dataset_name: "ImageNet_train"

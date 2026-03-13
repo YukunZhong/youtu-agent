@@ -1,0 +1,16 @@
+# @package _global_
+defaults:
+  - /agents/practice/anole_vqa_base@agent
+  - _self_
+
+exp_id: "scienceqa_eval"
+
+data:
+  dataset: "ScienceQA_eval"
+  type: "single"
+
+concurrency: 16
+pass_k: 1
+
+verify_filename: "vqa_exact.py"
+verify_func_name: "verify_func"

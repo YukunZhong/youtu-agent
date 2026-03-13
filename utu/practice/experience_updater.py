@@ -71,6 +71,32 @@ class ExperienceUpdater:
         recorder.experiences_update(new_experiences)
         return new_experiences
 
+    @staticmethod
+    def _get_group_key(rollout: EvaluationSample) -> str:
+        """Get group key: prefer meta.sample_id, fallback to raw_question."""
+        meta = rollout.meta or {}
+        return meta.get("sample_id", rollout.raw_question)
+
+    @staticmethod
+    def _load_image_tokens_text(sample: EvaluationSample) -> str:
+        """Load image-prefix tokens from file_name and return as text prefix.
+
+        The tokens file contains the full Anole/Chameleon input sequence:
+        [BOS, BOI, 1024 image_tokens, EOI, text_tokens..., EOS].
+        We only extract the image prefix (first 1027 tokens: BOS+BOI+1024img+EOI).
+        """
+        if not sample.file_name:
+            return ""
+        try:
+            import numpy as np
+            tokens = np.load(sample.file_name)
+            # Extract image prefix only: BOS + BOI + 1024 img tokens + EOI = tokens[0:1027]
+            image_prefix = tokens.flatten()[:1027]
+            token_str = ",".join(str(int(t)) for t in image_prefix)
+            return f"[MODEL_TOKENS]\n{token_str}\n[/MODEL_TOKENS]\n\n"
+        except Exception:
+            return ""
+
     async def _single_rollout_summary(
         self,
         rollouts: list[EvaluationSample],
@@ -78,20 +104,20 @@ class ExperienceUpdater:
         given_ground_truth: bool,
     ) -> dict[str, list[str]]:
         """Summarize each rollout's trajectory."""
-        # group by problems
+        # group by sample_id (fallback to raw_question)
         problems_to_rollouts = defaultdict(list)
         for rollout in rollouts:
             if len(rollout.trajectories) > 0:
-                problems_to_rollouts[rollout.raw_question].append(rollout)
+                group_key = self._get_group_key(rollout)
+                problems_to_rollouts[group_key].append(rollout)
 
-        # only summarize the group whose rollouts are partially correct
+        # only summarize groups with reward spread (continuous reward version)
         all_rollouts_to_process = []
         for rollouts in problems_to_rollouts.values():
             if given_ground_truth:
-                # only for those partially correct
                 scores = [each.reward for each in rollouts]
-                avg_score = sum(scores) / len(scores)
-                if avg_score > 0 and avg_score < 1:
+                reward_spread = max(scores) - min(scores)
+                if reward_spread >= 0.15:
                     all_rollouts_to_process.extend(rollouts)
             else:
                 all_rollouts_to_process.extend(rollouts)
@@ -108,10 +134,11 @@ class ExperienceUpdater:
                             agent_objective=self.agent_objective,
                             learning_objective=self.learning_objective,
                         )
+                        image_prefix = self._load_image_tokens_text(item)
                         up = FileUtils.get_jinja_template_str(
                             self.prompts["SINGLE_ROLLOUT_SUMMARY_TEMPLATE_UP"]
                         ).render(
-                            question=item.raw_question,
+                            question=image_prefix + item.raw_question,
                             trajectory=json.loads(item.trajectories)[0]["trajectory"],
                             answer=item.correct_answer if given_ground_truth else "[REDACTED]",
                             critique=item.reasoning or "[No critique provided]",
@@ -134,8 +161,10 @@ class ExperienceUpdater:
         for task in tqdm(asyncio.as_completed(tasks), total=len(tasks), desc="Single rollout summary"):
             result = await task
             if result is not None:
-                problem = result["raw_question"]
-                results[problem].append(result)
+                # group by sample_id, fallback to raw_question
+                meta = result.get("meta") or {}
+                group_key = meta.get("sample_id", result["raw_question"])
+                results[group_key].append(result)
         return results
 
     async def _group_advantage(
@@ -149,10 +178,10 @@ class ExperienceUpdater:
         all_rollouts = []
         for rollouts in problem_to_summarized_rollouts.values():
             if given_ground_truth:
-                # only for those partially correct
+                # continuous reward: require reward spread >= 0.15
                 scores = [each["reward"] for each in rollouts]
-                avg_score = sum(scores) / len(scores)
-                if avg_score > 0 and avg_score < 1:
+                reward_spread = max(scores) - min(scores)
+                if reward_spread >= 0.15:
                     all_rollouts.append(rollouts)
             else:
                 all_rollouts.append(rollouts)
@@ -170,13 +199,24 @@ class ExperienceUpdater:
                                 for i, each in enumerate(rollouts_per_problem)
                             ]
                         )
+                        # load image tokens for group advantage
+                        image_prefix = ""
+                        first_file = rollouts_per_problem[0].get("file_name", "")
+                        if first_file:
+                            try:
+                                import numpy as np
+                                tokens = np.load(first_file)
+                                token_str = ",".join(str(int(t)) for t in tokens.flatten())
+                                image_prefix = f"[MODEL_TOKENS]\n{token_str}\n[/MODEL_TOKENS]\n\n"
+                            except Exception:
+                                pass
                         sp = FileUtils.get_jinja_template_str(self.prompts["SINGLE_QUERY_GROUP_ADVANTAGE_SP"]).render(
                             agent_objective=self.agent_objective,
                             learning_objective=self.learning_objective,
                             num_experiences=num_experiences,
                         )
                         up = FileUtils.get_jinja_template_str(self.prompts["SINGLE_QUERY_GROUP_ADVANTAGE_UP"]).render(
-                            question=rollouts_per_problem[0]["raw_question"],
+                            question=image_prefix + rollouts_per_problem[0]["raw_question"],
                             answer=rollouts_per_problem[0]["correct_answer"] if given_ground_truth else "[REDACTED]",
                             trajectories=formatted_trajectories,
                         )

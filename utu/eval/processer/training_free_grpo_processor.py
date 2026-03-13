@@ -44,6 +44,26 @@ class TrainingFreeGRPOProcesser(BaseLLMJudgeProcesser):
                 problem=sample.raw_question,
                 experiences=formatted_experiences if formatted_experiences else "None",
             )
+        # MLLM: inject image-prefix tokens if file_name is a .npy file
+        # tokens file contains full MoDE sequence: [BOS, BOI, 1024 img tokens, EOI, text..., EOS]
+        # We only inject the image prefix (BOS + BOI + image + EOI = first 1027 tokens)
+        # The text portion is already in augmented_question
+        if sample.file_name and sample.file_name.endswith(".npy"):
+            try:
+                import numpy as np
+
+                tokens = np.load(sample.file_name)
+                # Extract image prefix: BOS(0) + BOI(8197) + 1024 img tokens + EOI(8196)
+                # EOI is at index 1026, so image prefix = tokens[0:1027]
+                image_prefix = tokens[:1027].tolist()
+                token_str = ",".join(str(int(t)) for t in image_prefix)
+                augmented_question = (
+                    f"[MODEL_TOKENS]\n{token_str}\n[/MODEL_TOKENS]\n\n"
+                    + augmented_question
+                )
+            except Exception:
+                pass
+
         sample.update(
             augmented_question=augmented_question,
         )
